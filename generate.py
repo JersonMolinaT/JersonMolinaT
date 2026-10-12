@@ -15,7 +15,7 @@ import time
 import urllib.request
 from html import escape
 
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 USER = os.environ.get("PROFILE_USER", "JersonMolinaT")
 TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -54,7 +54,8 @@ PROFILE = [
 ]
 
 WIDTH = 55            # ancho de cada línea de datos, en caracteres
-COLS, ROWS = 37, 25   # tamaño del retrato ASCII
+COLS, ROWS = 54, 34   # tamaño del retrato ASCII
+ART_FS, ART_LH = 12, 14.6   # letra y alto de línea del retrato
 
 
 # ----------------------------------------------------------------------------
@@ -174,16 +175,26 @@ def portrait():
         return [" " * COLS] * ROWS, [" " * COLS] * ROWS
     img = Image.open(local).convert("L")
 
-    # recorte vertical centrado (cada carácter es ~2 veces más alto que ancho)
+    # 1) recorte enfocado en la cara (cada carácter es ~2 veces más alto que ancho)
     w, h = img.size
-    target = (COLS * 9.6) / (ROWS * 19)
-    cw = min(w, int(h * target))
-    ch = int(cw / target)
+    target = (COLS * ART_FS * 0.6) / (ROWS * ART_LH)
+    cw = int(w * 0.72)
+    ch = min(h, int(cw / target))
     left = (w - cw) // 2
-    img = img.crop((left, 0, left + cw, min(h, ch)))
-    img = ImageOps.autocontrast(img, cutoff=2)
-    img = ImageEnhance.Contrast(img).enhance(1.25)
+    img = img.crop((left, 0, left + cw, ch))
+
+    # 2) contraste local para que se lean ojos, cejas, barba y pelo
+    img = ImageOps.equalize(ImageOps.autocontrast(img, cutoff=1))
+    img = ImageEnhance.Contrast(img).enhance(1.15)
+
+    # 3) máscara ovalada: apaga el fondo y deja solo cabeza y hombros
+    mw, mh = img.size
+    mask = Image.new("L", (mw, mh), 0)
+    ImageDraw.Draw(mask).ellipse((mw * 0.06, mh * 0.0, mw * 0.94, mh * 1.25), fill=255)
+    mask = mask.filter(ImageFilter.GaussianBlur(mw * 0.04))
+
     small = img.resize((COLS, ROWS), Image.LANCZOS)
+    msmall = mask.resize((COLS, ROWS), Image.LANCZOS)
 
     def render(invert):
         rows = []
@@ -191,10 +202,12 @@ def portrait():
             row = ""
             for x in range(COLS):
                 v = small.getpixel((x, y))
+                m = msmall.getpixel((x, y)) / 255
                 if invert:
                     v = 255 - v
+                v = int(v * m)
                 row += RAMP[min(len(RAMP) - 1, v * len(RAMP) // 256)]
-            rows.append(row)
+            rows.append(row.rstrip().ljust(COLS))
         return rows
 
     return render(False), render(True)   # (modo oscuro, modo claro)
@@ -277,8 +290,8 @@ def build(dark, art, s):
     cursor = (f'<rect x="{x_txt}" y="{ys[-1] + 9}" width="10" height="3" fill="{t["val"]}">'
               f'<animate attributeName="opacity" values="1;0;1" dur="1s" begin="{end:.2f}s" repeatCount="indefinite"/></rect>')
 
-    ay0 = 30 + (height - 30 - len(art) * 19) / 2 + 12
-    art_svg = "".join(f'<tspan x="15" y="{ay0 + i * 19:.0f}">{escape(r)}</tspan>' for i, r in enumerate(art))
+    ay0 = (height - (len(art) - 1) * ART_LH) / 2 + 4
+    art_svg = "".join(f'<tspan x="18" y="{ay0 + i * ART_LH:.1f}">{escape(r)}</tspan>' for i, r in enumerate(art))
 
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" font-family="ConsolasFallback,Consolas,'DejaVu Sans Mono',monospace" width="985" height="{height}" font-size="16px">
@@ -287,7 +300,7 @@ def build(dark, art, s):
 text, tspan {{ white-space: pre; }}
 </style>
 <rect width="985" height="{height}" fill="{t["bg"]}" rx="15"/>
-<text x="15" y="30" fill="{t["fg"]}">{art_svg}</text>
+<text x="18" y="30" fill="{t["fg"]}" font-size="{ART_FS}px">{art_svg}</text>
 <defs>{"".join(defs)}</defs>
 {"".join(texts)}
 {cursor}
